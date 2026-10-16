@@ -1,10 +1,15 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from collections import OrderedDict
+from collections.abc import AsyncIterable
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
+import signal
+import threading
 import uuid
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -12,16 +17,52 @@ MAX_DELAY_SECONDS = 300
 RETRY_AFTER_SECONDS = 30
 MAX_IDEMPOTENCY_KEYS = 1000
 
-app = FastAPI(title="Request Inspector")
+REQUESTS: list[dict] = []          # تخزين مؤقت في الذاكرة — مقصود في المشروع ده
+# Idempotency-Key -> saved first response, or None while that first request is still running.
+IDEMPOTENCY: OrderedDict[str, dict | None] = OrderedDict()
+# One queue per open /api/stream connection; every new request is pushed to all of them.
+SUBSCRIBERS: set[asyncio.Queue] = set()
+
+
+def close_streams():
+    for queue in SUBSCRIBERS:
+        while True:
+            try:
+                queue.put_nowait(None)  # None tells stream_requests to finish
+                break
+            except asyncio.QueueFull:
+                queue.get_nowait()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # On shutdown (Ctrl+C, or SIGTERM from `fastapi dev` reloading) uvicorn waits for every open
+    # connection to finish, and an SSE stream never does. So end the streams first, then let the
+    # original handler run; EventSource reconnects on its own once the server is back.
+    if threading.current_thread() is threading.main_thread():
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous = signal.getsignal(sig)
+
+            def handler(signum, frame, previous=previous):
+                loop.call_soon_threadsafe(close_streams)
+                if callable(previous):
+                    previous(signum, frame)
+                else:
+                    signal.signal(signum, previous)
+                    signal.raise_signal(signum)
+
+            signal.signal(sig, handler)
+    yield
+
+
+app = FastAPI(title="Request Inspector", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5500"],  # by name, not "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
-REQUESTS: list[dict] = []          # تخزين مؤقت في الذاكرة — مقصود في المشروع ده
-# Idempotency-Key -> saved first response, or None while that first request is still running.
-IDEMPOTENCY: OrderedDict[str, dict | None] = OrderedDict()
 
 
 @app.get("/", include_in_schema=False)
@@ -92,6 +133,11 @@ async def record_and_respond(path: str, request: Request) -> Response:
     }
     REQUESTS.insert(0, item)
     del REQUESTS[200:]
+    for queue in SUBSCRIBERS:
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            pass  # that viewer is too far behind; it resyncs from /api/requests on reconnect
 
     # The request is already stored above, so it shows up on the page while the delay runs.
     try:
@@ -116,3 +162,17 @@ async def record_and_respond(path: str, request: Request) -> Response:
 @app.get("/api/requests")
 def list_requests(limit: int = 50):
     return REQUESTS[:limit]
+
+
+@app.get("/api/stream", response_class=EventSourceResponse)
+async def stream_requests() -> AsyncIterable[ServerSentEvent]:
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    SUBSCRIBERS.add(queue)
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                return
+            yield ServerSentEvent(data=item, event="request", id=item["id"])
+    finally:
+        SUBSCRIBERS.discard(queue)

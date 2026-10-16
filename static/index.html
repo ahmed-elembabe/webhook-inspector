@@ -208,6 +208,25 @@
     text-transform: none;
     letter-spacing: 0;
   }
+  .live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .live::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .live.on::before { background: var(--get); }
+  .live.off { color: var(--danger); }
+  .live.off::before { background: var(--danger); }
+  .card.new { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: var(--selected); border-color: var(--accent); } }
   @media (max-width: 720px) {
     main { grid-template-columns: 1fr; height: auto; }
     #list { border-right: 0; border-bottom: 1px solid var(--border); max-height: 45vh; }
@@ -220,6 +239,7 @@
   <h1>Request Inspector</h1>
   <span class="hint">Send anything to <code id="hook-url"></code></span>
   <span class="spacer"></span>
+  <span id="live" class="live">Connecting…</span>
   <button id="refresh">Refresh</button>
 </header>
 <main>
@@ -234,8 +254,12 @@
   const refreshBtn = document.getElementById("refresh");
   document.getElementById("hook-url").textContent = location.origin + "/hook/…";
 
+  const liveEl = document.getElementById("live");
+
   let requests = [];
   let selectedId = null;
+  let newIds = new Set();        // cards to flash on the next render
+  let streamedDuringLoad = null; // live events that arrive while /api/requests is in flight
 
   function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
@@ -276,7 +300,7 @@
     if (requests.length === 0) {
       showState(
         "empty",
-        "No requests yet. Send one and press Refresh:",
+        "No requests yet. Send one and it shows up here instantly:",
         `curl ${location.origin}/hook/test`,
       );
       return;
@@ -285,7 +309,7 @@
 
     listEl.replaceChildren(...requests.map((r) =>
       el("button", {
-        class: "card" + (r.id === selectedId ? " selected" : ""),
+        class: "card" + (r.id === selectedId ? " selected" : "") + (newIds.has(r.id) ? " new" : ""),
         onclick: () => { selectedId = r.id; renderList(); },
       }, [
         methodBadge(r.method),
@@ -293,6 +317,7 @@
         el("span", { class: "meta", text: `${localTime(r.received_at)} · ${r.client_ip ?? "unknown IP"}` }),
       ])
     ));
+    newIds.clear();
     renderDetails(requests.find((r) => r.id === selectedId));
   }
 
@@ -387,19 +412,58 @@
   async function load() {
     refreshBtn.disabled = true;
     showState("loading", "Loading requests…");
+    streamedDuringLoad = [];
     try {
       const res = await fetch("/api/requests?limit=200");
       if (!res.ok) throw new Error(`Server responded ${res.status} ${res.statusText}`);
-      requests = await res.json();
+      const fetched = await res.json();
+      // Keep live events that arrived after the server built this snapshot.
+      const ids = new Set(fetched.map((r) => r.id));
+      requests = [...streamedDuringLoad.filter((r) => !ids.has(r.id)), ...fetched].slice(0, 200);
       renderList();
     } catch (err) {
       showState("error", "Can't reach the server. Is it running?", err.message);
     } finally {
+      streamedDuringLoad = null;
       refreshBtn.disabled = false;
     }
   }
 
+  function setLive(state, text) {
+    liveEl.className = "live " + state;
+    liveEl.textContent = text;
+  }
+
+  function connectStream() {
+    const source = new EventSource("/api/stream");
+    let connectedBefore = false;
+
+    source.addEventListener("open", () => {
+      setLive("on", "Live");
+      // After a reconnect we may have missed events (or the server restarted), so resync the list.
+      if (connectedBefore) load();
+      connectedBefore = true;
+    });
+
+    // EventSource retries on its own; this only updates the indicator.
+    source.addEventListener("error", () => setLive("off", "Reconnecting…"));
+
+    source.addEventListener("request", (event) => {
+      const item = JSON.parse(event.data);
+      if (streamedDuringLoad) {
+        streamedDuringLoad.unshift(item);
+        return;
+      }
+      if (requests.some((r) => r.id === item.id)) return;
+      requests.unshift(item);
+      requests.length = Math.min(requests.length, 200);
+      newIds.add(item.id);
+      renderList();
+    });
+  }
+
   refreshBtn.addEventListener("click", load);
+  connectStream();
   load();
 </script>
 </body>
