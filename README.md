@@ -53,6 +53,27 @@ curl -X POST localhost:8000/hook/payments \
   -d '{"event": "payment.succeeded", "amount": 150}'
 ```
 
+## Tests
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest                                   # whole suite, about 2 s
+.venv/bin/pytest tests/test_idempotency.py -k still_running   # a single test
+```
+
+The tests cover:
+
+- Capturing every method.
+- Raw bodies and repeated query keys.
+- UTC timestamps and the 200-request cap.
+- Status and delay simulation.
+- Idempotency, including a real concurrent retry.
+- Token checks.
+- The 1 MB limit, including chunked uploads.
+- Fail-closed startup.
+- CORS and cookie flags.
+- SSE broadcast and clean shutdown.
+
 ## API
 
 | Endpoint | Auth | What it does |
