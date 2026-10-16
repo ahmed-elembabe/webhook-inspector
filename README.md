@@ -2,6 +2,8 @@
 
 A small self-hosted tool that catches **any HTTP request** sent to it and shows it **live** in the browser: method, path, query, headers, body, client IP and time. Point a webhook, a mobile app, Postman or `curl` at it, and see exactly what arrived.
 
+**Live instance:** [webhook-inspector-i183.onrender.com](https://webhook-inspector-i183.onrender.com/docs). The link opens the public API docs. The dashboard is token-protected, so the GIF below shows it in action. This runs on Render's free tier, so the first request after a quiet period can take a moment while the server wakes up.
+
 ![Requests sent with curl appear on the dashboard instantly](docs/demo.gif)
 
 ## Features
