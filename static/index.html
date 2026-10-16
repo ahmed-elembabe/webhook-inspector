@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request Inspector</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --border: #dfe3e8;
+    --text: #1d2329;
+    --muted: #66707a;
+    --accent: #2f6fdb;
+    --selected: #eaf1fd;
+    --code-bg: #f1f3f6;
+    --danger: #c0352b;
+    --danger-bg: #fdecea;
+    --get: #1f8a4c;
+    --post: #2f6fdb;
+    --put: #b26b00;
+    --patch: #8a4fd1;
+    --delete: #c0352b;
+    --other: #66707a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171b;
+      --surface: #1c2026;
+      --border: #2e343c;
+      --text: #e6e9ed;
+      --muted: #98a2ad;
+      --accent: #6ea0ff;
+      --selected: #1f2b3f;
+      --code-bg: #12151a;
+      --danger: #ff7b70;
+      --danger-bg: #3a1f1d;
+      --get: #4cc985;
+      --post: #6ea0ff;
+      --put: #f0a63a;
+      --patch: #b78cf5;
+      --delete: #ff7b70;
+      --other: #98a2ad;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  header h1 { font-size: 16px; margin: 0; }
+  header .hint { color: var(--muted); font-size: 13px; }
+  header .hint code { font-size: 12px; }
+  header .spacer { flex: 1; }
+  button {
+    font: inherit;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .6; cursor: default; }
+  main {
+    display: grid;
+    grid-template-columns: minmax(260px, 360px) 1fr;
+    height: calc(100vh - 57px);
+  }
+  #list {
+    overflow-y: auto;
+    padding: 12px;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  #details { overflow-y: auto; padding: 16px 20px; }
+  .card {
+    text-align: left;
+    width: 100%;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+  }
+  .card.selected { background: var(--selected); border-color: var(--accent); }
+  .card .path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .card .meta { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .method {
+    font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 4px 6px;
+    border-radius: 4px;
+    color: var(--other);
+    border: 1px solid currentColor;
+    align-self: center;
+  }
+  .m-GET { color: var(--get); }
+  .m-POST { color: var(--post); }
+  .m-PUT { color: var(--put); }
+  .m-PATCH { color: var(--patch); }
+  .m-DELETE { color: var(--delete); }
+  .state {
+    margin: 32px auto;
+    max-width: 320px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .state.error {
+    color: var(--danger);
+    background: var(--danger-bg);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .state code {
+    display: block;
+    margin-top: 8px;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--code-bg);
+    color: var(--text);
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .spinner {
+    width: 22px;
+    height: 22px;
+    margin: 0 auto 8px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .detail-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .detail-head .path {
+    font: 600 15px ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+  }
+  .detail-head .spacer { flex: 1; }
+  .detail-meta { color: var(--muted); margin: 6px 0 0; }
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+    margin: 24px 0 8px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  td {
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+    vertical-align: top;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    word-break: break-all;
+  }
+  tr:first-child td { border-top: 0; }
+  td:first-child { width: 30%; color: var(--muted); }
+  pre {
+    margin: 0;
+    padding: 12px;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-x: auto;
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .none { color: var(--muted); font-style: italic; }
+  .tag {
+    font-size: 11px;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-left: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  @media (max-width: 720px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    #list { border-right: 0; border-bottom: 1px solid var(--border); max-height: 45vh; }
+    header .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Request Inspector</h1>
+  <span class="hint">Send anything to <code id="hook-url"></code></span>
+  <span class="spacer"></span>
+  <button id="refresh">Refresh</button>
+</header>
+<main>
+  <section id="list" aria-label="Captured requests"></section>
+  <section id="details" aria-live="polite"></section>
+</main>
+
+<script>
+  // Request data comes from anyone on the internet: render it with textContent only, never innerHTML.
+  const listEl = document.getElementById("list");
+  const detailsEl = document.getElementById("details");
+  const refreshBtn = document.getElementById("refresh");
+  document.getElementById("hook-url").textContent = location.origin + "/hook/…";
+
+  let requests = [];
+  let selectedId = null;
+
+  function el(tag, props = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      if (key === "class") node.className = value;
+      else if (key === "text") node.textContent = value;
+      else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value);
+    }
+    for (const child of [].concat(children)) {
+      if (child != null) node.append(child);
+    }
+    return node;
+  }
+
+  // Stored as UTC ISO strings; toLocaleString converts to this device's timezone.
+  function localTime(iso) {
+    return new Date(iso).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "medium",
+    });
+  }
+
+  function methodBadge(method) {
+    return el("span", { class: "method m-" + method, text: method });
+  }
+
+  function showState(kind, title, extra) {
+    const children = [];
+    if (kind === "loading") children.push(el("div", { class: "spinner" }));
+    children.push(el("div", { text: title }));
+    if (extra) children.push(el("code", { text: extra }));
+    listEl.replaceChildren(el("div", { class: "state " + kind }, children));
+    detailsEl.replaceChildren();
+  }
+
+  function renderList() {
+    if (requests.length === 0) {
+      showState(
+        "empty",
+        "No requests yet. Send one and press Refresh:",
+        `curl ${location.origin}/hook/test`,
+      );
+      return;
+    }
+    if (!requests.some((r) => r.id === selectedId)) selectedId = requests[0].id;
+
+    listEl.replaceChildren(...requests.map((r) =>
+      el("button", {
+        class: "card" + (r.id === selectedId ? " selected" : ""),
+        onclick: () => { selectedId = r.id; renderList(); },
+      }, [
+        methodBadge(r.method),
+        el("span", { class: "path", text: r.path, title: r.path }),
+        el("span", { class: "meta", text: `${localTime(r.received_at)} · ${r.client_ip ?? "unknown IP"}` }),
+      ])
+    ));
+    renderDetails(requests.find((r) => r.id === selectedId));
+  }
+
+  function kvTable(rows) {
+    if (rows.length === 0) return el("p", { class: "none", text: "None" });
+    return el("table", {}, rows.map(([k, v]) =>
+      el("tr", {}, [el("td", { text: k }), el("td", { text: v })])
+    ));
+  }
+
+  function bodyBlock(body) {
+    if (!body) return { label: null, node: el("p", { class: "none", text: "Empty body" }) };
+    try {
+      return { label: "JSON", node: el("pre", { text: JSON.stringify(JSON.parse(body), null, 2) }) };
+    } catch {
+      return { label: null, node: el("pre", { text: body }) };
+    }
+  }
+
+  function renderDetails(r) {
+    const queryRows = Object.entries(r.query).flatMap(([k, values]) => values.map((v) => [k, v]));
+    const headerRows = Object.entries(r.headers);
+    const body = bodyBlock(r.body);
+    const copyBtn = el("button", { text: "Copy as cURL" });
+    copyBtn.addEventListener("click", async () => {
+      const ok = await copyText(toCurl(r));
+      copyBtn.textContent = ok ? "Copied!" : "Copy failed";
+      setTimeout(() => { copyBtn.textContent = "Copy as cURL"; }, 1500);
+    });
+
+    detailsEl.replaceChildren(
+      el("div", { class: "detail-head" }, [
+        methodBadge(r.method),
+        el("span", { class: "path", text: r.path }),
+        el("span", { class: "spacer" }),
+        copyBtn,
+      ]),
+      el("p", {
+        class: "detail-meta",
+        text: `${localTime(r.received_at)} · from ${r.client_ip ?? "unknown IP"} · ${r.id}`,
+        title: `${r.received_at} (UTC)`,
+      }),
+      el("h2", { text: "Query" }),
+      kvTable(queryRows),
+      el("h2", { text: "Headers" }),
+      kvTable(headerRows),
+      el("h2", { text: "Body" }, body.label && el("span", { class: "tag", text: body.label })),
+      body.node,
+    );
+  }
+
+  // Headers that curl sets itself or that would be wrong when replayed.
+  const SKIP_HEADERS = new Set(["host", "content-length", "connection", "accept-encoding", "transfer-encoding"]);
+
+  function shellQuote(s) {
+    return "'" + String(s).replace(/'/g, `'\\''`) + "'";
+  }
+
+  function toCurl(r) {
+    const params = new URLSearchParams();
+    for (const [k, values] of Object.entries(r.query)) values.forEach((v) => params.append(k, v));
+    const qs = params.toString();
+    const url = location.origin + "/hook" + encodeURI(r.path) + (qs ? "?" + qs : "");
+
+    const parts = ["curl"];
+    if (r.method === "HEAD") parts.push("-I");
+    else if (r.method !== "GET" || r.body) parts.push("-X " + r.method);
+    parts.push(shellQuote(url));
+    for (const [k, v] of Object.entries(r.headers)) {
+      if (!SKIP_HEADERS.has(k)) parts.push("-H " + shellQuote(`${k}: ${v}`));
+    }
+    if (r.body) parts.push("--data-raw " + shellQuote(r.body));
+    return parts.join(" \\\n  ");
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // navigator.clipboard needs a secure context (https or localhost).
+      const ta = el("textarea", { style: "position:fixed;opacity:0" });
+      ta.value = text;
+      document.body.append(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    }
+  }
+
+  async function load() {
+    refreshBtn.disabled = true;
+    showState("loading", "Loading requests…");
+    try {
+      const res = await fetch("/api/requests?limit=200");
+      if (!res.ok) throw new Error(`Server responded ${res.status} ${res.statusText}`);
+      requests = await res.json();
+      renderList();
+    } catch (err) {
+      showState("error", "Can't reach the server. Is it running?", err.message);
+    } finally {
+      refreshBtn.disabled = false;
+    }
+  }
+
+  refreshBtn.addEventListener("click", load);
+  load();
+</script>
+</body>
+</html>

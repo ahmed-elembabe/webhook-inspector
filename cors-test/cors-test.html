@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CORS Test</title>
+<style>
+  :root { --bg: #f6f7f9; --surface: #fff; --border: #dfe3e8; --text: #1d2329; --muted: #66707a; --ok: #1f8a4c; --err: #c0352b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171b; --surface: #1c2026; --border: #2e343c; --text: #e6e9ed; --muted: #98a2ad; --ok: #4cc985; --err: #ff7b70; }
+  }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  button { font: inherit; padding: 8px 14px; margin: 0 8px 8px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }
+  #log { list-style: none; padding: 0; font: 12.5px/1.5 ui-monospace, Menlo, monospace; }
+  #log li { padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); word-break: break-all; }
+  .ok { color: var(--ok); }
+  .err { color: var(--err); }
+</style>
+</head>
+<body>
+<main>
+  <h1>CORS Test</h1>
+  <p>This page runs on <code id="origin"></code> and calls <code>http://localhost:8000</code>, which is a different origin.</p>
+  <button id="text">POST text/plain</button>
+  <button id="json">POST application/json</button>
+  <ul id="log"></ul>
+</main>
+<script>
+  const API = "http://localhost:8000";
+  document.getElementById("origin").textContent = location.origin;
+
+  function log(cls, text) {
+    const li = document.createElement("li");
+    li.className = cls;
+    li.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+    document.getElementById("log").prepend(li);
+  }
+
+  async function send(label, path, contentType, body) {
+    try {
+      const res = await fetch(API + path, { method: "POST", headers: { "Content-Type": contentType }, body });
+      log("ok", `${label}: ${res.status} ${await res.text()}`);
+    } catch (err) {
+      // The browser hides the real reason from JS; the details are in the Console.
+      log("err", `${label}: ${err.name}: ${err.message} (see Console)`);
+    }
+  }
+
+  // "Simple" request: no preflight, the browser sends it straight away.
+  document.getElementById("text").addEventListener("click", () =>
+    send("text/plain", "/hook/cors-text", "text/plain", "hello from text/plain"));
+
+  // Non-simple request: the browser first sends an OPTIONS preflight and only sends the POST if allowed.
+  document.getElementById("json").addEventListener("click", () =>
+    send("application/json", "/hook/cors-json", "application/json", JSON.stringify({ hello: "from json" })));
+</script>
+</body>
+</html>
