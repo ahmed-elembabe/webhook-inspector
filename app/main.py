@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
@@ -6,16 +6,27 @@ from collections import OrderedDict
 from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 from pathlib import Path
 import asyncio
+import os
+import secrets
 import signal
 import threading
 import uuid
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = PROJECT_DIR / "static"
 MAX_DELAY_SECONDS = 300
 RETRY_AFTER_SECONDS = 30
 MAX_IDEMPOTENCY_KEYS = 1000
+MAX_BODY_BYTES = 1024 * 1024
+
+# Locally the token comes from .env; on Render it's an environment variable set in the dashboard.
+load_dotenv(PROJECT_DIR / ".env")
+INSPECTOR_TOKEN = os.environ.get("INSPECTOR_TOKEN", "")
+if not INSPECTOR_TOKEN:
+    raise RuntimeError("Set INSPECTOR_TOKEN (in .env locally, or as an environment variable when deployed)")
 
 REQUESTS: list[dict] = []          # تخزين مؤقت في الذاكرة — مقصود في المشروع ده
 # Idempotency-Key -> saved first response, or None while that first request is still running.
@@ -56,6 +67,12 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def require_token(token: str = ""):
+    # compare_digest takes the same time whether the guess is close or not, so it can't be timed.
+    if not secrets.compare_digest(token.encode(), INSPECTOR_TOKEN.encode()):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+
 app = FastAPI(title="Request Inspector", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
@@ -65,7 +82,7 @@ app.add_middleware(
 )
 
 
-@app.get("/", include_in_schema=False)
+@app.get("/", include_in_schema=False, dependencies=[Depends(require_token)])
 def index():
     return FileResponse(STATIC_DIR / "index.html")
 
@@ -83,6 +100,10 @@ def set_cookie(response: Response):
 
 @app.api_route("/hook/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
 async def capture(path: str, request: Request):
+    body = await read_body_limited(request)
+    if body is None:
+        return JSONResponse({"error": f"body is larger than {MAX_BODY_BYTES} bytes"}, status_code=413)
+
     key = request.headers.get("idempotency-key")
     if key:
         if key in IDEMPOTENCY:
@@ -104,7 +125,7 @@ async def capture(path: str, request: Request):
             IDEMPOTENCY.popitem(last=False)
 
     try:
-        response = await record_and_respond(path, request)
+        response = await record_and_respond(path, request, body)
     except BaseException:
         if key:
             IDEMPOTENCY.pop(key, None)  # nothing was answered, so a retry should run for real
@@ -119,8 +140,21 @@ async def capture(path: str, request: Request):
     return response
 
 
-async def record_and_respond(path: str, request: Request) -> Response:
-    body = await request.body()
+async def read_body_limited(request: Request) -> bytes | None:
+    """Return the body, or None if it's over MAX_BODY_BYTES (without reading the rest)."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        return None
+    # Chunked uploads have no Content-Length, so count while reading too.
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > MAX_BODY_BYTES:
+            return None
+    return bytes(body)
+
+
+async def record_and_respond(path: str, request: Request, body: bytes) -> Response:
     item = {
         "id": f"req_{uuid.uuid4().hex[:8]}",
         "method": request.method,
@@ -159,12 +193,12 @@ async def record_and_respond(path: str, request: Request) -> Response:
     return JSONResponse({"received": True, "id": item["id"], "status": status}, status_code=status, headers=headers)
 
 
-@app.get("/api/requests")
+@app.get("/api/requests", dependencies=[Depends(require_token)])
 def list_requests(limit: int = 50):
     return REQUESTS[:limit]
 
 
-@app.get("/api/stream", response_class=EventSourceResponse)
+@app.get("/api/stream", response_class=EventSourceResponse, dependencies=[Depends(require_token)])
 async def stream_requests() -> AsyncIterable[ServerSentEvent]:
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     SUBSCRIBERS.add(queue)

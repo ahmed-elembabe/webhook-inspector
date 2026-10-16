@@ -6,12 +6,43 @@
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+echo "INSPECTOR_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" > .env
 .venv/bin/fastapi dev app/main.py
 ```
 
-- الصفحة: http://localhost:8000/
-- الـ API docs: http://localhost:8000/docs
-- ابعت أي طلب على: `http://localhost:8000/hook/<أي path>`
+- **الصفحة:** `http://localhost:8000/?token=<الـ token اللي في .env>`
+- **الـ API docs:**
+
+  ```
+  http://localhost:8000/docs
+  ```
+- **ابعت أي طلب على:** `http://localhost:8000/hook/<أي path>`
+
+## الحماية
+
+| المسار | محتاج `?token=`؟ |
+|---|---|
+| `/hook/...` | لأ، مفتوح لأي حد عشان أي خدمة تقدر تبعتله |
+| `/`، `/api/requests`، `/api/stream` | أيوه، غير كده بيرجع `401` |
+
+- **الـ token مش في الكود:** بيتقري من `INSPECTOR_TOKEN`. محلياً بيبقى في ملف `.env` (متجاهل في git)، وعلى السيرفر بيبقى متغير بيئة.
+- **لو مفيش token:** السيرفر **بيرفض يشتغل**، عشان مايطلعش على الإنترنت مفتوح بالغلط.
+- **حد الحجم:** أي body أكبر من **1MB** بياخد `413`، ومابيتسجّلش. ده بيشتغل كمان مع الطلبات اللي مافيهاش `Content-Length` (chunked).
+- **عيب الـ token في الرابط:** بيظهر في سجل المتصفح، وفي الـ logs بتاعة السيرفر. ده مقبول هنا، بس في نظام حقيقي الأحسن يتبعت في header أو cookie.
+
+## النشر على Render
+
+| الخانة | القيمة |
+|---|---|
+| Runtime | Python 3 |
+| Build Command | `pip install -r requirements.txt` |
+| Start Command | `fastapi run app/main.py --port $PORT --forwarded-allow-ips "*"` |
+| Health Check Path | `/health` |
+| Environment Variable | `INSPECTOR_TOKEN` = token طويل وعشوائي |
+
+`--forwarded-allow-ips "*"` بيخلي الأداة تصدّق الـ `X-Forwarded-For` اللي جاي من الـ proxy بتاع Render، فتسجّل الـ IP الحقيقي للي بعت الطلب، مش الـ IP بتاع الـ proxy. الكلام ده آمن هنا بس، لأن مفيش حد يقدر يوصل للسيرفر غير من خلال Render.
+
+الخطة المجانية بتنيّم السيرفر بعد فترة من غير استخدام. أول طلب بعدها بياخد وقت لحد ما يصحى، وكل الطلبات المتسجلة بتتمسح، لأنها في الذاكرة بس.
 
 ## لايف بالـ SSE
 

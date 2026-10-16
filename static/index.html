@@ -255,6 +255,8 @@
   document.getElementById("hook-url").textContent = location.origin + "/hook/…";
 
   const liveEl = document.getElementById("live");
+  // The page itself is served only with ?token=…; pass the same token on to the API.
+  const tokenParam = "token=" + encodeURIComponent(new URLSearchParams(location.search).get("token") ?? "");
 
   let requests = [];
   let selectedId = null;
@@ -414,7 +416,8 @@
     showState("loading", "Loading requests…");
     streamedDuringLoad = [];
     try {
-      const res = await fetch("/api/requests?limit=200");
+      const res = await fetch("/api/requests?limit=200&" + tokenParam);
+      if (res.status === 401) throw new Error("Invalid token: open the page with the right ?token=");
       if (!res.ok) throw new Error(`Server responded ${res.status} ${res.statusText}`);
       const fetched = await res.json();
       // Keep live events that arrived after the server built this snapshot.
@@ -435,7 +438,7 @@
   }
 
   function connectStream() {
-    const source = new EventSource("/api/stream");
+    const source = new EventSource("/api/stream?" + tokenParam);
     let connectedBefore = false;
 
     source.addEventListener("open", () => {
@@ -445,8 +448,10 @@
       connectedBefore = true;
     });
 
-    // EventSource retries on its own; this only updates the indicator.
-    source.addEventListener("error", () => setLive("off", "Reconnecting…"));
+    // EventSource retries on its own after a dropped connection, but gives up for good on an
+    // error status such as 401, which leaves it CLOSED.
+    source.addEventListener("error", () =>
+      setLive("off", source.readyState === EventSource.CLOSED ? "Disconnected" : "Reconnecting…"));
 
     source.addEventListener("request", (event) => {
       const item = JSON.parse(event.data);
